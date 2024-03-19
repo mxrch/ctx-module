@@ -25,6 +25,102 @@
 const debug = require('debug');
 const fs    = require('fs');
 const vm    = require('vm');
+const os    = require('os');
+
+//os.platform = () => 'win32';
+
+function posixToHostPathFormat(fromPath)
+{
+  // if it's not windows, assume it's posix compliant
+  if (os.platform() !== 'win32')
+    return fromPath;
+
+  const pathParts = fromPath.split('/');
+  const pathIsAbsolute = fromPath[0] === '/' ? true : false;
+
+  if (pathIsAbsolute)
+  {
+    pathParts.shift();
+    const driveLetter = pathParts[0].split('ctx_module_drive_letter_')[1];
+
+    pathParts[0] = `${driveLetter}:`;
+  }
+  else if (pathParts[0][0] === '.')
+    pathParts[0] = '.';
+
+console.log(pathParts);
+
+  return pathParts.join('\\');
+}
+
+function hostPathToPosix(fromPath)
+{
+console.log('>>>>>>>>>>>>>HOSTPATHTOPOSIX"'); debugger;
+  // if it's not windows, assume it's posix compliant
+  if (os.platform() !== 'win32')
+    return fromPath;
+
+  const pathParts = fromPath.split('\\');
+  var pathPrefix = '';
+  var posixPath;
+
+  if (pathParts.length === 0)
+    return './';
+
+  if (pathParts[0].length === 2 && pathParts[0][1] === ':')
+    pathParts[0] = `/ctx_module_drive_letter_${pathParts[0][0]}`;
+  else if (pathParts[0][0] === '.' && pathParts[0].length === 1)
+  {
+    pathParts.shift();
+    pathPrefix = './';
+  }
+
+  const joinedPathParts = pathParts.join('/');
+  posixPath = pathPrefix  + joinedPathParts;
+
+console.log('~~~~~~~~~~~\n' + fromPath);
+console.log(pathParts);
+console.log(posixPath);
+
+  return posixPath;
+}
+
+var test_full_path = 'C:\\you\\are\\real\\test.js';
+var test_rela_path = '.\\ayou\\are\\real\\index.html';
+var test_modu_path = 'express';
+var test_ugly_path = '.\\wait\\..\\testing\\main.py';
+var test_unix_path = './i/am/a/unix/path.txt';
+
+var aa = posixToHostPathFormat(hostPathToPosix(test_full_path));
+console.log(aa);
+var bb = posixToHostPathFormat(hostPathToPosix(test_rela_path));
+console.log(bb);
+var cc = posixToHostPathFormat(hostPathToPosix(test_modu_path));
+console.log(cc);
+var dd = posixToHostPathFormat(hostPathToPosix(test_ugly_path));
+console.log(dd);
+var ee = posixToHostPathFormat(hostPathToPosix(test_unix_path));
+console.log(ee);
+
+debugger;
+
+function fsReadFileWrapper(path)
+{
+  const realPath = posixToHostPathFormat(path);
+  return fs.readFileSync(realPath, 'utf-8');
+}
+
+function fsExistsWrapper(path)
+{
+  const realPath = posixToHostPathFormat(path);
+  return fs.existsSync(realPath);
+}
+
+function fsStatWrapper(path)
+{
+  const realPath = posixToHostPathFormat(path);
+  return fs.statSync(realPath);
+}
 
 /**
  * CtxModule constructor; creates a new module.
@@ -43,6 +139,7 @@ const vm    = require('vm');
  */
 function CtxModule(ctx, cnId, moduleCache, parent)
 {
+  cnId = hostPathToPosix(cnId);
   const that = this;
   
   /* Create the resources for new module long before eval so that circular deps work */
@@ -84,6 +181,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
    */
   function makeNodeModulesPaths(fromPath)
   {
+    fromPath = hostPathToPosix(fromPath);
     const paths = [];
     
     if (!cnId)
@@ -105,6 +203,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
   /** Implementation of require() for this module */
   this.require = function ctxRequire(moduleIdentifier)
   {
+    moduleIdentifier = hostPathToPosix(moduleIdentifier);
     debug('ctx-module:require')('require ' + moduleIdentifier);
 
     try
@@ -142,6 +241,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
    */
   function canonicalize(moduleIdentifier)
   {
+    moduleIdentifier = hostPathToPosix(moduleIdentifier);
     if (moduleIdentifier.startsWith('./') || moduleIdentifier.startsWith('../') || moduleIdentifier === '.')
       moduleIdentifier = relativeResolve(that.path, moduleIdentifier);
     else
@@ -209,7 +309,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
   {
     var moduleFilename;
     
-    moduleIdentifier = canonicalize(moduleIdentifier);
+    moduleIdentifier = hostPathToPosix(canonicalize(moduleIdentifier));
     if (moduleCache.hasOwnProperty(moduleIdentifier))
     {
       debug('ctx-module:requireResolve')('require.resolve', moduleIdentifier, '=>', moduleIdentifier, '(cache hit)');
@@ -246,7 +346,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
   function loadJSModule(module, filename)
   {
     const SHEBANG_REGEX = /^#!.*\r{0,1}\n/m;
-    var moduleCode = fs.readFileSync(module.filename, 'utf-8');
+    var moduleCode = fsReadFileWrapper(module.filename, 'utf-8');
     var moduleFun;
     var lineOffset = 0;
     
@@ -295,11 +395,12 @@ function CtxModule(ctx, cnId, moduleCache, parent)
 
   function loadJSONModule(module, filename)
   {
-    copyProps(module.exports, JSON.parse(fs.readFileSync(filename, 'utf-8')));
+    copyProps(module.exports, JSON.parse(fsReadFileWrapper(filename, 'utf-8')));
   }
 
   function loadModule(filename)
   {
+    filename = hostPathToPosix(filename);
     const module = moduleCache[filename] = new CtxModule(ctx, filename, moduleCache, { require: that.require });
     const match = filename.match(/\.[a-z]*$/);
     const ext = match && match[0];
@@ -332,17 +433,18 @@ function CtxModule(ctx, cnId, moduleCache, parent)
    */
   function locateModuleFile(filenameBase)
   {
+    filenameBase = hostPathToPosix(filenameBase);
     var filename;
 
-    if (fs.existsSync(filename = `${filenameBase}/package.json`))
+    if (fsExistsWrapper(filename = `${filenameBase}/package.json`))
     {
-      const pkg = JSON.parse(fs.readFileSync(filename, 'utf-8'));
+      const pkg = JSON.parse(fsReadFileWrapper(filename, 'utf-8'));
       return locateModuleFile(relativeResolve(filenameBase, pkg.main || 'index.js'));
     }
 
     try
     {
-      const sb = fs.statSync(filenameBase); /* no throw => either filenameBase is a module file or its directory */
+      const sb = fsStatWrapper(filenameBase); /* no throw => either filenameBase is a module file or its directory */
 
       if (sb.mode & fs.constants.S_IFDIR)
       {
@@ -363,7 +465,7 @@ function CtxModule(ctx, cnId, moduleCache, parent)
 
     for (let ext in that.require.extensions)
     {
-      if (fs.existsSync(filename = `${filenameBase}${ext}`))
+      if (fsExistsWrapper(filename = `${filenameBase}${ext}`))
         return filename;
     }
 
